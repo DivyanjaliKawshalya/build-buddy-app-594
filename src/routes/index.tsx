@@ -10,6 +10,7 @@ import {
   type TeamUpPost,
 } from "@/lib/teamup";
 import { FilterBar } from "@/components/teamup/FilterBar";
+import { PostCard } from "@/components/teamup/PostCard";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -172,6 +173,34 @@ function Index() {
     });
   }
 
+  function handleToggleReveal(id: string) {
+    setRevealed((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    );
+  }
+
+  function handleToggleStatus(id: string) {
+    setPosts((prev) =>
+      prev.map((p) => {
+        if (p.id === id) {
+          const nextStatus = p.status === "FULFILLED" ? "OPEN" : "FULFILLED";
+          return { ...p, status: nextStatus };
+        }
+        return p;
+      }),
+    );
+  }
+
+  function handleDeletePost(id: string) {
+    setPosts((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  function handleCopyContact(contact: string) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(contact);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-cream font-sans text-ink">
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-cream/80 backdrop-blur-md">
@@ -326,95 +355,20 @@ function Index() {
               </div>
             ) : (
               <div className="mt-6 grid gap-5 sm:grid-cols-2">
-                {visible.map((post) => {
-                  const isNew = post.id === newestId;
-                  const isOpen = revealed.includes(post.id);
-                  return (
-                    <article
-                      key={post.id}
-                      className={`relative rounded-[24px] border border-ink/10 bg-surface/85 p-5 backdrop-blur-xl transition-all duration-200 hover:-translate-y-1 hover:border-rose/30 ${
-                        isNew ? "animate-[pin_0.6s_cubic-bezier(0.32,0.72,0,1)_both]" : ""
-                      }`}
-                    >
-                      {isNew ? (
-                        <>
-                          <span className="absolute -top-2 left-1/2 grid size-7 -translate-x-1/2 place-items-center rounded-full bg-rose shadow-sm">
-                            <span className="block size-2 rounded-full bg-cream/90" />
-                          </span>
-                          <span className="absolute -top-2 right-4 rounded-full bg-leaf/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-leaf">
-                            New
-                          </span>
-                        </>
-                      ) : null}
-
-                      <div className="flex items-start justify-between gap-3 pt-1">
-                        <div>
-                          <p className="font-display text-lg font-semibold">{post.name}</p>
-                          <p className="text-xs text-muted-ink">
-                            {post.indexNumber} · {post.courseCode}
-                          </p>
-                        </div>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${tintFor(post.courseCode)}`}
-                        >
-                          {post.courseCode}
-                        </span>
-                      </div>
-
-                      <div className="mt-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-leaf">
-                          Offers
-                        </p>
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {post.offers.map((s) => (
-                            <span
-                              key={s}
-                              className="rounded-full bg-mint/60 px-2.5 py-1 text-xs font-medium"
-                            >
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="mt-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-rose">
-                          Needs
-                        </p>
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {post.needs.map((s) => (
-                            <span
-                              key={s}
-                              className="rounded-full border border-dashed border-rose/40 bg-blush/30 px-2.5 py-1 text-xs font-medium"
-                            >
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {isOpen ? (
-                        <div className="mt-4 animate-[up_0.35s_ease_both] rounded-2xl bg-cream/70 p-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-ink">
-                            Contact
-                          </p>
-                          <p className="mt-1 text-sm font-medium">{post.contact}</p>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setRevealed((r) => [...r, post.id])}
-                          className="group mt-4 flex items-center gap-1.5 text-sm font-semibold text-rose transition-colors hover:text-ink"
-                        >
-                          <span>Reveal contact</span>
-                          <span className="transition-transform duration-300 group-hover:translate-y-0.5">
-                            ↓
-                          </span>
-                        </button>
-                      )}
-                    </article>
-                  );
-                })}
+                {visible.map((post) => (
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    isNew={post.id === newestId}
+                    isRevealed={revealed.includes(post.id)}
+                    onToggleReveal={handleToggleReveal}
+                    onToggleStatus={handleToggleStatus}
+                    onDelete={handleDeletePost}
+                    onSkillClick={(skill) => setSelectedSkill(skill)}
+                    onCopyContact={handleCopyContact}
+                    courseTint={tintFor(post.courseCode)}
+                  />
+                ))}
               </div>
             )}
           </section>
