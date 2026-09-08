@@ -6,6 +6,7 @@ import {
   parseSkills,
   savePosts,
   seedPosts,
+  validatePostInput,
   type TeamUpPost,
 } from "@/lib/teamup";
 
@@ -91,30 +92,17 @@ function Index() {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    const offers = parseSkills(form.offers);
-    const needs = parseSkills(form.needs);
-
-    if (
-      !form.name.trim() ||
-      !form.indexNumber.trim() ||
-      !form.courseCode.trim() ||
-      !form.contact.trim() ||
-      offers.length === 0 ||
-      needs.length === 0
-    ) {
-      setError("Fill every field — at least one skill offered and one needed.");
+    const validation = validatePostInput(form);
+    if (!validation.success || !validation.data) {
+      const firstError = Object.values(validation.errors)[0] || "Please enter valid details.";
+      setError(firstError);
       return;
     }
 
     const post: TeamUpPost = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: form.name.trim(),
-      indexNumber: form.indexNumber.trim(),
-      courseCode: form.courseCode.trim().toUpperCase(),
-      offers,
-      needs,
-      contact: form.contact.trim(),
       createdAt: Date.now(),
+      ...validation.data,
     };
 
     setPosts((p) => [post, ...p]);
