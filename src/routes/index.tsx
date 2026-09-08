@@ -6,8 +6,10 @@ import {
   parseSkills,
   savePosts,
   seedPosts,
+  validatePostInput,
   type TeamUpPost,
 } from "@/lib/teamup";
+import { FilterBar } from "@/components/teamup/FilterBar";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -48,6 +50,9 @@ function Index() {
   const [posts, setPosts] = useState<TeamUpPost[]>(seedPosts);
   const [hydrated, setHydrated] = useState(false);
   const [course, setCourse] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "OPEN" | "FULFILLED">("ALL");
   const [revealed, setRevealed] = useState<string[]>([]);
   const [newestId, setNewestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,10 +85,58 @@ function Index() {
     [sorted],
   );
 
-  const visible = useMemo(
-    () => (course === "all" ? sorted : sorted.filter((p) => p.courseCode === course)),
-    [sorted, course],
-  );
+  const popularSkills = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of posts) {
+      for (const s of [...p.offers, ...p.needs]) {
+        counts[s] = (counts[s] || 0) + 1;
+      }
+    }
+    return Object.keys(counts)
+      .sort((a, b) => (counts[b] || 0) - (counts[a] || 0))
+      .slice(0, 8);
+  }, [posts]);
+
+  const visible = useMemo(() => {
+    return sorted.filter((p) => {
+      if (course !== "all" && p.courseCode !== course) return false;
+      if (statusFilter !== "ALL" && (p.status || "OPEN") !== statusFilter) return false;
+
+      if (selectedSkill) {
+        const skillLower = selectedSkill.toLowerCase();
+        const hasOffer = p.offers.some((s) => s.toLowerCase() === skillLower);
+        const hasNeed = p.needs.some((s) => s.toLowerCase() === skillLower);
+        if (!hasOffer && !hasNeed) return false;
+      }
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const nameMatch = p.name.toLowerCase().includes(q);
+        const courseMatch = p.courseCode.toLowerCase().includes(q);
+        const indexMatch = p.indexNumber.toLowerCase().includes(q);
+        const offerMatch = p.offers.some((s) => s.toLowerCase().includes(q));
+        const needMatch = p.needs.some((s) => s.toLowerCase().includes(q));
+        if (!nameMatch && !courseMatch && !indexMatch && !offerMatch && !needMatch) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [sorted, course, statusFilter, selectedSkill, searchQuery]);
+
+  const hasActiveFilters =
+    course !== "all" ||
+    searchQuery.trim() !== "" ||
+    selectedSkill !== null ||
+    statusFilter !== "ALL";
+
+  function clearAllFilters() {
+    setCourse("all");
+    setSearchQuery("");
+    setSelectedSkill(null);
+    setStatusFilter("ALL");
+  }
 
   function update(key: keyof typeof form, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -91,30 +144,17 @@ function Index() {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    const offers = parseSkills(form.offers);
-    const needs = parseSkills(form.needs);
-
-    if (
-      !form.name.trim() ||
-      !form.indexNumber.trim() ||
-      !form.courseCode.trim() ||
-      !form.contact.trim() ||
-      offers.length === 0 ||
-      needs.length === 0
-    ) {
-      setError("Fill every field — at least one skill offered and one needed.");
+    const validation = validatePostInput(form);
+    if (!validation.success || !validation.data) {
+      const firstError = Object.values(validation.errors)[0] || "Please enter valid details.";
+      setError(firstError);
       return;
     }
 
     const post: TeamUpPost = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: form.name.trim(),
-      indexNumber: form.indexNumber.trim(),
-      courseCode: form.courseCode.trim().toUpperCase(),
-      offers,
-      needs,
-      contact: form.contact.trim(),
       createdAt: Date.now(),
+      ...validation.data,
     };
 
     setPosts((p) => [post, ...p]);
@@ -256,21 +296,23 @@ function Index() {
                   Newest requests pinned first · {visible.length} open
                 </p>
               </div>
-              <label className="flex items-center gap-2 rounded-2xl border border-ink/10 bg-surface/60 px-3 py-2 text-sm backdrop-blur">
-                <span className="text-muted-ink">Course</span>
-                <select
-                  className="cursor-pointer bg-transparent font-medium outline-none"
-                  value={course}
-                  onChange={(e) => setCourse(e.target.value)}
-                >
-                  <option value="all">All courses</option>
-                  {courses.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            </div>
+
+            <div className="mt-4">
+              <FilterBar
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                selectedCourse={course}
+                onCourseChange={setCourse}
+                courses={courses}
+                selectedSkill={selectedSkill}
+                onSkillSelect={setSelectedSkill}
+                popularSkills={popularSkills}
+                statusFilter={statusFilter}
+                onStatusFilterChange={setStatusFilter}
+                onClearFilters={clearAllFilters}
+                hasActiveFilters={hasActiveFilters}
+              />
             </div>
 
             {visible.length === 0 ? (
