@@ -1,13 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { Users } from "lucide-react";
 
 import {
   loadPosts,
-  parseSkills,
   savePosts,
   seedPosts,
+  validatePostInput,
+  resetToSeedPosts,
   type TeamUpPost,
+  type PostInput,
+  type FieldErrors,
 } from "@/lib/teamup";
+import { PostForm } from "@/components/teamup/PostForm";
+import { PostCard } from "@/components/teamup/PostCard";
+import { FilterBar } from "@/components/teamup/FilterBar";
+import { DataActions } from "@/components/teamup/DataActions";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -32,34 +41,28 @@ export const Route = createFileRoute("/")({
 });
 
 const courseTints = [
-  "bg-sky/60 text-ocean",
-  "bg-lilac/70 text-ink/70",
-  "bg-butter/70 text-ink/70",
-  "bg-blush/70 text-ink/70",
+  "bg-sky/60 text-ocean border border-ocean/20",
+  "bg-lilac/70 text-ink/80 border border-ink/10",
+  "bg-butter/70 text-ink/80 border border-ink/10",
+  "bg-blush/70 text-rose border border-rose/20",
 ];
 
 function tintFor(code: string) {
   let sum = 0;
   for (const ch of code) sum += ch.charCodeAt(0);
-  return courseTints[sum % courseTints.length];
+  return courseTints[sum % courseTints.length] || courseTints[0];
 }
 
 function Index() {
   const [posts, setPosts] = useState<TeamUpPost[]>(seedPosts);
   const [hydrated, setHydrated] = useState(false);
   const [course, setCourse] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "OPEN" | "FULFILLED">("ALL");
   const [revealed, setRevealed] = useState<string[]>([]);
   const [newestId, setNewestId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const [form, setForm] = useState({
-    name: "",
-    indexNumber: "",
-    courseCode: "",
-    offers: "",
-    needs: "",
-    contact: "",
-  });
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   useEffect(() => {
     setPosts(loadPosts());
@@ -67,7 +70,9 @@ function Index() {
   }, []);
 
   useEffect(() => {
-    if (hydrated) savePosts(posts);
+    if (hydrated) {
+      savePosts(posts);
+    }
   }, [posts, hydrated]);
 
   const sorted = useMemo(
@@ -80,301 +85,258 @@ function Index() {
     [sorted],
   );
 
-  const visible = useMemo(
-    () => (course === "all" ? sorted : sorted.filter((p) => p.courseCode === course)),
-    [sorted, course],
-  );
+  // Collect most common skills across all posts for quick filters
+  const popularSkills = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of posts) {
+      for (const s of [...p.offers, ...p.needs]) {
+        counts[s] = (counts[s] || 0) + 1;
+      }
+    }
+    return Object.keys(counts)
+      .sort((a, b) => (counts[b] || 0) - (counts[a] || 0))
+      .slice(0, 8);
+  }, [posts]);
 
-  function update(key: keyof typeof form, value: string) {
-    setForm((f) => ({ ...f, [key]: value }));
-  }
+  // Comprehensive multi-criteria filtering
+  const visible = useMemo(() => {
+    return sorted.filter((p) => {
+      // Course filter
+      if (course !== "all" && p.courseCode !== course) return false;
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const offers = parseSkills(form.offers);
-    const needs = parseSkills(form.needs);
+      // Status filter
+      if (statusFilter !== "ALL" && p.status !== statusFilter) return false;
 
-    if (
-      !form.name.trim() ||
-      !form.indexNumber.trim() ||
-      !form.courseCode.trim() ||
-      !form.contact.trim() ||
-      offers.length === 0 ||
-      needs.length === 0
-    ) {
-      setError("Fill every field — at least one skill offered and one needed.");
-      return;
+      // Skill tag filter
+      if (selectedSkill) {
+        const skillLower = selectedSkill.toLowerCase();
+        const hasOffer = p.offers.some((s) => s.toLowerCase() === skillLower);
+        const hasNeed = p.needs.some((s) => s.toLowerCase() === skillLower);
+        if (!hasOffer && !hasNeed) return false;
+      }
+
+      // Search query filter (matches name, course, offers, or needs)
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const nameMatch = p.name.toLowerCase().includes(q);
+        const courseMatch = p.courseCode.toLowerCase().includes(q);
+        const indexMatch = p.indexNumber.toLowerCase().includes(q);
+        const offerMatch = p.offers.some((s) => s.toLowerCase().includes(q));
+        const needMatch = p.needs.some((s) => s.toLowerCase().includes(q));
+        if (!nameMatch && !courseMatch && !indexMatch && !offerMatch && !needMatch) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [sorted, course, statusFilter, selectedSkill, searchQuery]);
+
+  async function handleCreatePost(input: PostInput): Promise<boolean> {
+    const validation = validatePostInput(input);
+    if (!validation.success || !validation.data) {
+      setFieldErrors(validation.errors);
+      toast.error("Please fix the errors indicated on the form.");
+      return false;
     }
 
-    const post: TeamUpPost = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      name: form.name.trim(),
-      indexNumber: form.indexNumber.trim(),
-      courseCode: form.courseCode.trim().toUpperCase(),
-      offers,
-      needs,
-      contact: form.contact.trim(),
+    setFieldErrors({});
+
+    const newPost: TeamUpPost = {
+      id: `post-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       createdAt: Date.now(),
+      ...validation.data,
     };
 
-    setPosts((p) => [post, ...p]);
-    setNewestId(post.id);
-    setRevealed([]);
+    setPosts((prev) => [newPost, ...prev]);
+    setNewestId(newPost.id);
+    toast.success(`Request pinned to the board for ${newPost.courseCode}!`);
+    return true;
+  }
+
+  function handleToggleReveal(id: string) {
+    setRevealed((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    );
+  }
+
+  function handleToggleStatus(id: string) {
+    setPosts((prev) =>
+      prev.map((p) => {
+        if (p.id === id) {
+          const nextStatus = p.status === "FULFILLED" ? "OPEN" : "FULFILLED";
+          toast.info(
+            nextStatus === "FULFILLED"
+              ? "Post marked as teammate found / fulfilled!"
+              : "Post reopened for teammates!",
+          );
+          return { ...p, status: nextStatus };
+        }
+        return p;
+      }),
+    );
+  }
+
+  function handleDeletePost(id: string) {
+    setPosts((prev) => prev.filter((p) => p.id !== id));
+    toast.success("Post deleted from the board.");
+  }
+
+  function handleCopyContact(contact: string) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(contact);
+      toast.success("Contact copied to clipboard!");
+    }
+  }
+
+  function handleImportPosts(imported: TeamUpPost[]) {
+    setPosts(imported);
+    savePosts(imported);
+    toast.success(`Successfully imported ${imported.length} posts from backup!`);
+  }
+
+  function handleResetSeed() {
+    const initial = resetToSeedPosts();
+    setPosts(initial);
     setCourse("all");
-    setError(null);
-    setForm({
-      name: "",
-      indexNumber: "",
-      courseCode: "",
-      offers: "",
-      needs: "",
-      contact: "",
-    });
+    setSearchQuery("");
+    setSelectedSkill(null);
+    setStatusFilter("ALL");
+    toast.info("Board reset to initial campus demo posts.");
+  }
+
+  const hasActiveFilters =
+    course !== "all" ||
+    searchQuery.trim() !== "" ||
+    selectedSkill !== null ||
+    statusFilter !== "ALL";
+
+  function clearAllFilters() {
+    setCourse("all");
+    setSearchQuery("");
+    setSelectedSkill(null);
+    setStatusFilter("ALL");
   }
 
   return (
-    <div className="min-h-screen bg-cream font-sans text-ink">
+    <div className="min-h-screen bg-cream font-sans text-ink selection:bg-rose/20">
+      {/* Header */}
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-cream/80 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-2.5">
-            <span className="grid size-9 place-items-center rounded-2xl bg-rose">
-              <span className="block size-2.5 rounded-full bg-cream" />
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 place-items-center rounded-2xl bg-rose text-cream shadow-xs">
+              <Users className="size-5" />
             </span>
-            <div className="leading-none">
-              <p className="font-display text-lg font-semibold">TeamUp</p>
-              <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-ink">
-                group project matchmaker
+            <div className="leading-tight">
+              <span className="font-display text-xl font-bold tracking-tight text-ink">TeamUp</span>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-ink">
+                Campus Project Matchmaker · Part 2
               </p>
             </div>
           </div>
-          <span className="rounded-full border border-ink/10 bg-surface/60 px-3 py-1.5 text-xs font-medium text-muted-ink backdrop-blur">
-            No login needed
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full border border-leaf/30 bg-mint/50 px-3 py-1 text-xs font-semibold text-leaf">
+              ● Live Sync
+            </span>
+            <span className="hidden sm:inline-block rounded-full border border-ink/10 bg-surface/80 px-3 py-1 text-xs font-medium text-muted-ink">
+              USJP BICT
+            </span>
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-10">
-        <div className="grid gap-8 lg:grid-cols-[400px_minmax(0,1fr)]">
-          <form
-            onSubmit={submit}
-            className="h-fit rounded-[28px] border border-ink/10 bg-surface/70 p-6 backdrop-blur-xl lg:sticky lg:top-24"
-          >
-            <p className="font-display text-2xl font-semibold">Pin a request</p>
-            <p className="mt-1 text-sm text-muted-ink">
-              Offer a skill, ask for one. Your post goes straight to the board.
-            </p>
+      {/* Main Content Layout */}
+      <main className="mx-auto max-w-7xl px-6 py-8">
+        <div className="grid gap-8 lg:grid-cols-[380px_minmax(0,1fr)]">
+          {/* Left Column: Post Creation Form */}
+          <aside>
+            <PostForm onSubmit={handleCreatePost} fieldErrors={fieldErrors} />
+          </aside>
 
-            <div className="mt-5 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="label-text">Name</span>
-                  <input
-                    className="field"
-                    placeholder="Ada Okafor"
-                    value={form.name}
-                    onChange={(e) => update("name", e.target.value)}
-                  />
-                </label>
-                <label className="block">
-                  <span className="label-text">Index no.</span>
-                  <input
-                    className="field"
-                    placeholder="23014889"
-                    value={form.indexNumber}
-                    onChange={(e) => update("indexNumber", e.target.value)}
-                  />
-                </label>
-              </div>
-
-              <label className="block">
-                <span className="label-text">Course code</span>
-                <input
-                  className="field"
-                  placeholder="CS201"
-                  value={form.courseCode}
-                  onChange={(e) => update("courseCode", e.target.value)}
-                />
-              </label>
-
-              <div className="rounded-2xl bg-mint/50 p-3">
-                <label className="block">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-leaf">
-                    I can offer
-                  </span>
-                  <input
-                    className="field bg-surface/70"
-                    placeholder="Data viz, Figma"
-                    value={form.offers}
-                    onChange={(e) => update("offers", e.target.value)}
-                  />
-                </label>
-                <p className="mt-1.5 text-[11px] text-muted-ink">Separate skills with commas</p>
-              </div>
-
-              <div className="rounded-2xl bg-blush/50 p-3">
-                <label className="block">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-rose">
-                    I need help with
-                  </span>
-                  <input
-                    className="field bg-surface/70"
-                    placeholder="SQL, Python"
-                    value={form.needs}
-                    onChange={(e) => update("needs", e.target.value)}
-                  />
-                </label>
-                <p className="mt-1.5 text-[11px] text-muted-ink">Separate skills with commas</p>
-              </div>
-
-              <label className="block">
-                <span className="label-text">Contact method</span>
-                <input
-                  className="field"
-                  placeholder="ada@campus.edu"
-                  value={form.contact}
-                  onChange={(e) => update("contact", e.target.value)}
-                />
-              </label>
-            </div>
-
-            {error ? <p className="mt-3 text-xs font-medium text-rose">{error}</p> : null}
-
-            <button
-              type="submit"
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-rose px-4 py-3 font-display text-base font-semibold text-cream transition-all duration-200 hover:bg-rose/90"
-            >
-              Pin to the board
-              <span aria-hidden>→</span>
-            </button>
-          </form>
-
-          <section>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="animate-[up_0.5s_cubic-bezier(0.32,0.72,0,1)_both]">
-                <h1 className="font-display text-4xl font-semibold">The board</h1>
-                <p className="text-sm text-muted-ink">
-                  Newest requests pinned first · {visible.length} open
+          {/* Right Column: Search, Filters, Post Board, Data Persistence Actions */}
+          <section className="space-y-6">
+            {/* Header Title & Counter */}
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h1 className="font-display text-3xl sm:text-4xl font-bold text-ink">
+                  The Project Board
+                </h1>
+                <p className="mt-0.5 text-xs text-muted-ink font-medium">
+                  Showing {visible.length} of {posts.length} requests · Newest requests pinned first
                 </p>
               </div>
-              <label className="flex items-center gap-2 rounded-2xl border border-ink/10 bg-surface/60 px-3 py-2 text-sm backdrop-blur">
-                <span className="text-muted-ink">Course</span>
-                <select
-                  className="cursor-pointer bg-transparent font-medium outline-none"
-                  value={course}
-                  onChange={(e) => setCourse(e.target.value)}
+
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="text-xs font-bold text-rose hover:underline"
                 >
-                  <option value="all">All courses</option>
-                  {courses.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  Clear active filters
+                </button>
+              ) : null}
             </div>
 
+            {/* Filter & Search Bar */}
+            <FilterBar
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              selectedCourse={course}
+              onCourseChange={setCourse}
+              courses={courses}
+              selectedSkill={selectedSkill}
+              onSkillSelect={setSelectedSkill}
+              popularSkills={popularSkills}
+              statusFilter={statusFilter}
+              onStatusFilterChange={setStatusFilter}
+              onClearFilters={clearAllFilters}
+              hasActiveFilters={hasActiveFilters}
+            />
+
+            {/* Cards Grid / Empty State */}
             {visible.length === 0 ? (
-              <div className="mt-6 rounded-[24px] border border-dashed border-ink/15 bg-surface/60 p-10 text-center">
-                <p className="font-display text-2xl font-semibold">Nothing pinned yet</p>
-                <p className="mx-auto mt-2 max-w-[42ch] text-sm text-muted-ink">
-                  {course === "all"
-                    ? "Be the first to post what you can offer and what you still need."
-                    : `No open requests for ${course} yet. Try another course or pin the first one.`}
+              <div className="rounded-[28px] border border-dashed border-ink/15 bg-surface/60 p-12 text-center backdrop-blur-sm">
+                <p className="font-display text-2xl font-bold text-ink">No requests match your filters</p>
+                <p className="mx-auto mt-2 max-w-[44ch] text-xs text-muted-ink">
+                  {hasActiveFilters
+                    ? "Try adjusting your search query, course filter, or skill tag to see more classmate requests."
+                    : "No requests pinned yet. Use the form on the left to pin the first project teammate request!"}
                 </p>
+                {hasActiveFilters ? (
+                  <button
+                    type="button"
+                    onClick={clearAllFilters}
+                    className="mt-4 rounded-xl bg-rose px-4 py-2 text-xs font-semibold text-cream hover:bg-rose/90"
+                  >
+                    Reset All Filters
+                  </button>
+                ) : null}
               </div>
             ) : (
-              <div className="mt-6 grid gap-5 sm:grid-cols-2">
-                {visible.map((post) => {
-                  const isNew = post.id === newestId;
-                  const isOpen = revealed.includes(post.id);
-                  return (
-                    <article
-                      key={post.id}
-                      className={`relative rounded-[24px] border border-ink/10 bg-surface/85 p-5 backdrop-blur-xl transition-all duration-200 hover:-translate-y-1 hover:border-rose/30 ${
-                        isNew ? "animate-[pin_0.6s_cubic-bezier(0.32,0.72,0,1)_both]" : ""
-                      }`}
-                    >
-                      {isNew ? (
-                        <>
-                          <span className="absolute -top-2 left-1/2 grid size-7 -translate-x-1/2 place-items-center rounded-full bg-rose shadow-sm">
-                            <span className="block size-2 rounded-full bg-cream/90" />
-                          </span>
-                          <span className="absolute -top-2 right-4 rounded-full bg-leaf/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-leaf">
-                            New
-                          </span>
-                        </>
-                      ) : null}
-
-                      <div className="flex items-start justify-between gap-3 pt-1">
-                        <div>
-                          <p className="font-display text-lg font-semibold">{post.name}</p>
-                          <p className="text-xs text-muted-ink">
-                            {post.indexNumber} · {post.courseCode}
-                          </p>
-                        </div>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${tintFor(post.courseCode)}`}
-                        >
-                          {post.courseCode}
-                        </span>
-                      </div>
-
-                      <div className="mt-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-leaf">
-                          Offers
-                        </p>
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {post.offers.map((s) => (
-                            <span
-                              key={s}
-                              className="rounded-full bg-mint/60 px-2.5 py-1 text-xs font-medium"
-                            >
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="mt-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-rose">
-                          Needs
-                        </p>
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {post.needs.map((s) => (
-                            <span
-                              key={s}
-                              className="rounded-full border border-dashed border-rose/40 bg-blush/30 px-2.5 py-1 text-xs font-medium"
-                            >
-                              {s}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {isOpen ? (
-                        <div className="mt-4 animate-[up_0.35s_ease_both] rounded-2xl bg-cream/70 p-3">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-ink">
-                            Contact
-                          </p>
-                          <p className="mt-1 text-sm font-medium">{post.contact}</p>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setRevealed((r) => [...r, post.id])}
-                          className="group mt-4 flex items-center gap-1.5 text-sm font-semibold text-rose transition-colors hover:text-ink"
-                        >
-                          <span>Reveal contact</span>
-                          <span className="transition-transform duration-300 group-hover:translate-y-0.5">
-                            ↓
-                          </span>
-                        </button>
-                      )}
-                    </article>
-                  );
-                })}
+              <div className="grid gap-4 sm:grid-cols-2">
+                {visible.map((post) => (
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    isNew={post.id === newestId}
+                    isRevealed={revealed.includes(post.id)}
+                    onToggleReveal={handleToggleReveal}
+                    onToggleStatus={handleToggleStatus}
+                    onDelete={handleDeletePost}
+                    onSkillClick={(skill) => setSelectedSkill(skill)}
+                    onCopyContact={handleCopyContact}
+                    courseTint={tintFor(post.courseCode)}
+                  />
+                ))}
               </div>
             )}
+
+            {/* Data Persistence Tools & Backup */}
+            <DataActions
+              posts={posts}
+              onImport={handleImportPosts}
+              onReset={handleResetSeed}
+            />
           </section>
         </div>
       </main>
