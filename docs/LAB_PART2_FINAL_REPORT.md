@@ -128,30 +128,60 @@ A multi-tiered testing strategy was adopted:
 
 ## 10. Problems Corrected, with Before/After and Retest Evidence (Task 4)
 
-### Correction 1: Input Validation & Security (DEF-01, DEF-02)
-- **Before (Part 1)**: Entering `abc-xyz` as an index number and `fake-contact` was accepted without any error.
-- **After (Part 2)**: Zod validation enforces university index regex (`^\d{7,8}$` or `^[A-Z]{2,4}/\d{2}/\d{4,5}$`) and email/phone format. Specific inline error messages highlight the exact invalid field.
-- **Retest Result**: Tested with invalid inputs; form safely blocks submission and displays inline warnings. Tested with valid data; post saves seamlessly.
+### Correction 1: Strict University Index Number Validation (DEF-01)
+- **Before (Part 1)**: Entering arbitrary strings such as `abc-xyz` or `-999` was accepted without any error, allowing invalid student profiles to be pinned.
+- **After (Part 2)**: Added Zod regex validation (`/^([0-9]{7,8}|[A-Za-z]{2,4}\/[0-9]{2}\/[0-9]{4,5})$/`). Only valid university index formats (e.g. `23014889` or `ICT/22/101`) are accepted.
+- **Retest Evidence**: Submitted `abc-xyz` -> Form prevented submission, highlighted the field in red, and displayed *"Enter a valid university Index No. (e.g. 23014889 or ICT/22/1234)"*. Valid index `23014889` passed seamlessly.
 
-### Correction 2: Real-time Skill Search & Interactive Tag Filtering (DEF-04)
-- **Before (Part 1)**: The user had no way to search for classmates offering "Python" or "Figma".
-- **After (Part 2)**: Added full-text search across skills, student names, and course codes. In addition, popular skill pills allow 1-click filtering.
-- **Retest Result**: Typing "Python" immediately filters the cards down to only matching requests. Clicking the "Figma" pill displays only Figma-related posts.
+### Correction 2: Contact Method Format Validation (DEF-02)
+- **Before (Part 1)**: Entering gibberish or a single character like `not-an-email` was accepted.
+- **After (Part 2)**: Implemented Zod email and international/local phone number format checks.
+- **Retest Evidence**: Submitted `fake_contact` -> Form rejected input with *"Provide a valid email (e.g. name@campus.edu) or phone number"*. Submitted `student@sjp.ac.lk` and `+94771234567` -> Both accepted successfully.
 
-### Correction 3: Request Lifecycle & Deletion (DEF-05)
-- **Before (Part 1)**: Posts could never be resolved or removed.
-- **After (Part 2)**: Added "Mark Fulfilled" toggle (with visual checkmark badge) and "Delete Post" button. Optional 4-digit PIN prevents unauthorized classmates from tampering with another student's post.
-- **Retest Result**: Marked post as fulfilled; card styling softened and badge updated. Entered PIN to delete post; post removed from board.
+### Correction 3: Anti-Duplicate Submission Prevention (DEF-03)
+- **Before (Part 1)**: Rapidly clicking the "Pin to the board" button triggered multiple simultaneous state updates, creating identical duplicate cards.
+- **After (Part 2)**: Added an `isSubmitting` lock state. The submit button is immediately disabled and displays a spinning loader until the post is added.
+- **Retest Evidence**: Rapidly clicked the button 5 times within 1 second -> Only exactly 1 request was created; subsequent clicks were blocked.
 
-### Correction 4: Data Persistence & Backup Tools (DEF-06)
-- **Before (Part 1)**: All posts lived solely in `localStorage` with zero export or recovery capability.
-- **After (Part 2)**: Implemented 1-click "Export JSON", "Export CSV", and "Import JSON" backup restore.
-- **Retest Result**: Exported 5 posts to JSON file, cleared storage, imported the backup file; all 5 posts restored flawlessly.
+### Correction 4: Real-time Skill Search & Interactive Tag Filtering (DEF-04)
+- **Before (Part 1)**: The core premise was "find teammates by skill", but there was zero ability to search or filter by skills (only course dropdown).
+- **After (Part 2)**: Built `FilterBar.tsx` with full-text search across skills offered, skills needed, student names, and course codes. Added interactive skill pill badges (e.g. `Python`, `Figma`, `React`) for 1-click filtering.
+- **Retest Evidence**: Typed "Python" -> Instantly filtered the board to only posts offering or needing Python. Clicked the "Figma" pill -> Board displayed only Figma requests.
 
-### Correction 5: Automated Testing Suite (DEF-11)
-- **Before (Part 1)**: Zero test files.
-- **After (Part 2)**: Built test suite in `src/lib/teamup.test.ts` executing 7 unit tests across validation, sanitization, deduplication, and schema adherence.
-- **Retest Result**: All 7 tests executed via `bun test` passing with 100% success.
+### Correction 5: Request Lifecycle Management & Security PIN (DEF-05)
+- **Before (Part 1)**: Posts had no lifecycle state; once pinned, they could never be marked resolved, edited, or deleted.
+- **After (Part 2)**: Added status field (`OPEN` vs `FULFILLED`). Implemented "Mark Fulfilled / Reopen" action and a "Delete Post" button. Added an optional 4-digit Creator PIN so only the post author can update or delete their post.
+- **Retest Evidence**: Marked post as fulfilled -> Card opacity changed, badge updated to "Fulfilled". Entered incorrect PIN on deletion -> Action blocked with *"Incorrect 4-digit PIN"*. Entered correct PIN -> Post removed from board.
+
+### Correction 6: Data Persistence, Export & Backup Utilities (DEF-06)
+- **Before (Part 1)**: All data resided solely in client `localStorage`. If cache was cleared or another browser opened, all student posts were lost.
+- **After (Part 2)**: Created `DataActions.tsx` with 1-click "Export JSON", "Export CSV", and "Import JSON" backup restore with full schema validation.
+- **Retest Evidence**: Exported 5 posts to a JSON file -> Cleared browser storage -> Imported the file -> All 5 posts immediately restored to the board.
+
+### Correction 7: Accessible Form Controls & WAI-ARIA Compliance (DEF-07)
+- **Before (Part 1)**: Form controls lacked explicit `<label htmlFor="...">` and `id` bindings, failing WCAG 2.1 accessibility audits.
+- **After (Part 2)**: All form inputs refactored with matching `id`, `htmlFor`, and `aria-invalid` attributes.
+- **Retest Evidence**: Inspected with browser accessibility dev tools -> All form fields correctly announce associated labels and error states to screen readers.
+
+### Correction 8: Interactive Toast Notifications (DEF-08)
+- **Before (Part 1)**: Submitting a post gave no confirmation message or visual acknowledgment.
+- **After (Part 2)**: Integrated `sonner` Toaster component in `__root.tsx` with animated visual toasts for post creation, status changes, and errors.
+- **Retest Evidence**: Pinned a post -> Green toast appeared stating *"Request pinned to the board for CS201!"*.
+
+### Correction 9: 1-Click "Copy Contact" Micro-interaction (DEF-09)
+- **Before (Part 1)**: Contact information was rendered as plain text, forcing students to manually highlight and copy.
+- **After (Part 2)**: Added a "Copy" button with automatic clipboard writing (`navigator.clipboard.writeText`) and feedback icon toggle ("Copied!").
+- **Retest Evidence**: Clicked "Copy" -> Email copied to OS clipboard and confirmed with toast.
+
+### Correction 10: Modular Architecture & Dead Code Elimination (DEF-10)
+- **Before (Part 1)**: Monolithic 384-line `src/routes/index.tsx` mixed UI, form state, persistence, and animations into a single unmaintainable file.
+- **After (Part 2)**: Decomposed into clean modular components: `PostForm.tsx`, `PostCard.tsx`, `FilterBar.tsx`, and `DataActions.tsx`.
+- **Retest Evidence**: Production build compiles with cleaner bundle boundaries and zero TypeScript errors (`bun run build`).
+
+### Correction 11: Automated Unit & Regression Testing (DEF-11)
+- **Before (Part 1)**: Zero test files in repository.
+- **After (Part 2)**: Built automated test suite in `src/lib/teamup.test.ts` covering 7 test scenarios (valid post input, invalid index regex rejection, contact validation, skill deduplication, and XSS sanitization).
+- **Retest Evidence**: Ran `bun test` -> 7 tests passed with 22 assertions in 29ms.
 
 ---
 
