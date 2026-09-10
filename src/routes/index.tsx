@@ -4,15 +4,21 @@ import { toast } from "sonner";
 import { Users } from "lucide-react";
 
 import {
-  loadPosts,
-  savePosts,
-  seedPosts,
   validatePostInput,
-  resetToSeedPosts,
   type TeamUpPost,
   type PostInput,
   type FieldErrors,
 } from "@/lib/teamup";
+import {
+  fetchPosts,
+  insertPost,
+  updatePostStatus,
+  deletePost,
+  importPosts,
+  resetBoard,
+  rowToPost,
+} from "@/lib/teamup-db";
+import { supabase } from "@/integrations/supabase/client";
 import { PostForm } from "@/components/teamup/PostForm";
 import { PostCard } from "@/components/teamup/PostCard";
 import { FilterBar } from "@/components/teamup/FilterBar";
@@ -45,17 +51,17 @@ const courseTints = [
   "bg-lilac/70 text-ink/80 border border-ink/10",
   "bg-butter/70 text-ink/80 border border-ink/10",
   "bg-blush/70 text-rose border border-rose/20",
-];
+] as const;
 
-function tintFor(code: string) {
+function tintFor(code: string): string {
   let sum = 0;
   for (const ch of code) sum += ch.charCodeAt(0);
-  return courseTints[sum % courseTints.length] || courseTints[0];
+  return courseTints[sum % courseTints.length] ?? courseTints[0];
 }
 
 function Index() {
-  const [posts, setPosts] = useState<TeamUpPost[]>(seedPosts);
-  const [hydrated, setHydrated] = useState(false);
+  const [posts, setPosts] = useState<TeamUpPost[]>([]);
+  const [loading, setLoading] = useState(true);
   const [course, setCourse] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
@@ -65,15 +71,49 @@ function Index() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   useEffect(() => {
-    setPosts(loadPosts());
-    setHydrated(true);
-  }, []);
+    let active = true;
 
-  useEffect(() => {
-    if (hydrated) {
-      savePosts(posts);
-    }
-  }, [posts, hydrated]);
+    fetchPosts()
+      .then((rows) => {
+        if (active) setPosts(rows);
+      })
+      .catch(() => {
+        if (active) toast.error("Could not load the board. Please refresh.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    const channel = supabase
+      .channel("teamup-posts")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "teamup_posts" },
+        (payload) => {
+          if (!active) return;
+          if (payload.eventType === "INSERT") {
+            const post = rowToPost(payload.new as never);
+            setPosts((prev) =>
+              prev.some((p) => p.id === post.id) ? prev : [post, ...prev],
+            );
+          } else if (payload.eventType === "UPDATE") {
+            const post = rowToPost(payload.new as never);
+            setPosts((prev) => prev.map((p) => (p.id === post.id ? post : p)));
+          } else if (payload.eventType === "DELETE") {
+            const removedId = (payload.old as { id?: string }).id;
+            if (removedId) {
+              setPosts((prev) => prev.filter((p) => p.id !== removedId));
+            }
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const sorted = useMemo(
     () => [...posts].sort((a, b) => b.createdAt - a.createdAt),
@@ -142,16 +182,18 @@ function Index() {
 
     setFieldErrors({});
 
-    const newPost: TeamUpPost = {
-      id: `post-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      createdAt: Date.now(),
-      ...validation.data,
-    };
-
-    setPosts((prev) => [newPost, ...prev]);
-    setNewestId(newPost.id);
-    toast.success(`Request pinned to the board for ${newPost.courseCode}!`);
-    return true;
+    try {
+      const newPost = await insertPost(validation.data);
+      setPosts((prev) =>
+        prev.some((p) => p.id === newPost.id) ? prev : [newPost, ...prev],
+      );
+      setNewestId(newPost.id);
+      toast.success(`Request pinned to the board for ${newPost.courseCode}!`);
+      return true;
+    } catch {
+      toast.error("Could not pin the request. Please try again.");
+      return false;
+    }
   }
 
   function handleToggleReveal(id: string) {
@@ -160,26 +202,38 @@ function Index() {
     );
   }
 
-  function handleToggleStatus(id: string) {
+  async function handleToggleStatus(id: string) {
+    const current = posts.find((p) => p.id === id);
+    if (!current) return;
+    const nextStatus = current.status === "FULFILLED" ? "OPEN" : "FULFILLED";
     setPosts((prev) =>
-      prev.map((p) => {
-        if (p.id === id) {
-          const nextStatus = p.status === "FULFILLED" ? "OPEN" : "FULFILLED";
-          toast.info(
-            nextStatus === "FULFILLED"
-              ? "Post marked as teammate found / fulfilled!"
-              : "Post reopened for teammates!",
-          );
-          return { ...p, status: nextStatus };
-        }
-        return p;
-      }),
+      prev.map((p) => (p.id === id ? { ...p, status: nextStatus } : p)),
     );
+    try {
+      await updatePostStatus(id, nextStatus);
+      toast.info(
+        nextStatus === "FULFILLED"
+          ? "Post marked as teammate found / fulfilled!"
+          : "Post reopened for teammates!",
+      );
+    } catch {
+      setPosts((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, status: current.status } : p)),
+      );
+      toast.error("Could not update the request. Please try again.");
+    }
   }
 
-  function handleDeletePost(id: string) {
+  async function handleDeletePost(id: string) {
+    const snapshot = posts;
     setPosts((prev) => prev.filter((p) => p.id !== id));
-    toast.success("Post deleted from the board.");
+    try {
+      await deletePost(id);
+      toast.success("Post deleted from the board.");
+    } catch {
+      setPosts(snapshot);
+      toast.error("Could not delete the request. Please try again.");
+    }
   }
 
   function handleCopyContact(contact: string) {
@@ -189,20 +243,28 @@ function Index() {
     }
   }
 
-  function handleImportPosts(imported: TeamUpPost[]) {
-    setPosts(imported);
-    savePosts(imported);
-    toast.success(`Successfully imported ${imported.length} posts from backup!`);
+  async function handleImportPosts(imported: TeamUpPost[]) {
+    try {
+      await importPosts(imported);
+      setPosts(await fetchPosts());
+      toast.success(`Successfully imported ${imported.length} posts to the shared board!`);
+    } catch {
+      toast.error("Could not import those posts. Please check the file.");
+    }
   }
 
-  function handleResetSeed() {
-    const initial = resetToSeedPosts();
-    setPosts(initial);
-    setCourse("all");
-    setSearchQuery("");
-    setSelectedSkill(null);
-    setStatusFilter("ALL");
-    toast.info("Board reset to initial campus demo posts.");
+  async function handleResetSeed() {
+    try {
+      await resetBoard();
+      setPosts(await fetchPosts());
+      setCourse("all");
+      setSearchQuery("");
+      setSelectedSkill(null);
+      setStatusFilter("ALL");
+      toast.info("Shared board reset to the campus demo posts.");
+    } catch {
+      toast.error("Could not reset the board. Please try again.");
+    }
   }
 
   const hasActiveFilters =
@@ -262,7 +324,9 @@ function Index() {
                   The Project Board
                 </h1>
                 <p className="mt-0.5 text-xs text-muted-ink font-medium">
-                  Showing {visible.length} of {posts.length} requests · Newest requests pinned first
+                  {loading
+                    ? "Loading the shared board…"
+                    : `Showing ${visible.length} of ${posts.length} requests · Updates live for everyone`}
                 </p>
               </div>
 
